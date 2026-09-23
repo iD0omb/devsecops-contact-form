@@ -1,0 +1,23 @@
+#  Local .terraform directories
+**/.terraform/*
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# .tfvars files
+*.tfvars
+
+# environment vars
+.env
+
+# kubernetes config
+kubeconfig
+
+# Python
+__pycache__/
+venv/
+
+# Keys/Certs
+*.pem
+*.key
