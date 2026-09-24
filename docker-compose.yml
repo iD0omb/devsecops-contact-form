@@ -1,4 +1,6 @@
 services:
+  
+  #Database Container
   db:
     image: postgres:16-alpine
     environment:
@@ -13,6 +15,7 @@ services:
       interval: 5s
       retries: 5
 
+  #Webserver container (Depends on DB)
   web:
     build: ./app
     ports:

@@ -29,7 +29,7 @@ def index():
         return redirect(url_for("index"))
     return render_template("form.html")
 
-@app.route("/health")            # Kubernetes liveness/readiness probe (Day 5)
+@app.route("/health")            # Kubernetes liveness/readiness probe
 def health():
     return {"status": "ok"}, 200
 

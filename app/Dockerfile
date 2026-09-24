@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Copy requirements FIRST, install, then copy code.
-# Docker caches each layer — code changes don't trigger a reinstall.
+# Docker caches each layer, code changes don't trigger a reinstall.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
