@@ -1,5 +1,15 @@
 repos:
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.0
     hooks:
       - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: terraform-fmt
+        name: terraform fmt
+        entry: terraform fmt -check -recursive
+        language: unsupported
+        files: \.tf$
+        pass_filenames: false
