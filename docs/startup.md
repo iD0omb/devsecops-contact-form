@@ -6,5 +6,5 @@
 2. terraform init
     (Versioning only changes on init with the "-upgrade" flag)
     
-3. terraform plan
-5. terraform apply
+3. terraform plan -o="filename.tfplan"
+5. terraform apply "filename.tfplan"
