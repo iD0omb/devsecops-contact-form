@@ -1,18 +1,33 @@
 import os
 import psycopg2
 from flask import Flask, request, render_template, redirect, url_for
+import json
+import boto3
 
 app = Flask(__name__)
 
+def get_db_credentials():
+    secret_arn = os.environ.get("DB_SECRET_ARN")
+    if secret_arn:
+        # On EKS: IRSA gives this pod temporary AWS credentials,
+        # which boto3 finds automatically. No keys anywhere.
+        client = boto3.client("secretsmanager")
+        secret = json.loads(client.get_secret_value(SecretId=secret_arn)["SecretString"])
+        return secret["username"], secret["password"]
+    # Local dev (docker compose): values from .env
+    return os.environ["DB_USER"], os.environ["DB_PASSWORD"]
+
+
 def get_db_connection():
-    # Credentials come from environment variables.
-    # Local dev: set via docker-compose / shell. In EKS: from Secrets Manager.
+    user, password = get_db_credentials()
     return psycopg2.connect(
         host=os.environ["DB_HOST"],
         port=os.environ.get("DB_PORT", "5432"),
         dbname=os.environ["DB_NAME"],
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
+        user=user,
+        password=password,
+        # RDS enforces TLS; local Postgres has none, so compose sets "disable"
+        sslmode=os.environ.get("DB_SSLMODE", "require"),
     )
 
 @app.route("/", methods=["GET", "POST"])
