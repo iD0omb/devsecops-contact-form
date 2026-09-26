@@ -22,7 +22,7 @@ resource "aws_subnet" "public" {
   cidr_block        = local.public_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
-  tags = { Name = "dso-public-${local.azs[count.index]}" }
+  tags = { Name = "dso-public-${local.azs[count.index]}", "kubernetes.io/role/elb" = "1" }
 }
 
 # Private Subnet
@@ -32,7 +32,7 @@ resource "aws_subnet" "private" {
   cidr_block        = local.private_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
-  tags = { Name = "dso-private-${local.azs[count.index]}" }
+  tags = { Name = "dso-private-${local.azs[count.index]}", "kubernetes.io/role/internal-elb" = "1" }
 }
 
 # Internet Gateway
