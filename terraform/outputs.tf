@@ -11,3 +11,8 @@ output "db_secret_arn" {
 output "ecr_repository_url" {
   value = aws_ecr_repository.app.repository_url
 }
+
+#IRSA, Output the role of the application's 
+output "app_role_arn" {
+  value = aws_iam_role.app.arn
+}
