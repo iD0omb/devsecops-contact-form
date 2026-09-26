@@ -16,3 +16,12 @@ output "ecr_repository_url" {
 output "app_role_arn" {
   value = aws_iam_role.app.arn
 }
+
+# ACM Certificate for HTTPS
+output "aws_acm_certificate_arn" {
+  value = aws_acm_certificate.app.arn
+}
+
+output "acm_validation_record" {
+  value = aws_acm_certificate.app.domain_validation_options
+}
