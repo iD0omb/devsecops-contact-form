@@ -57,14 +57,18 @@ resource "aws_route_table_association" "public" {
   count          = length(local.azs)
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
-
 }
 
-# Private routing: local route only for now
+# Private routing: 0.0.0.0/0, NAT Outbound only
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "dso-private-rt" }
 
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main.id
+  }
+
+  tags = { Name = "dso-private-rt" }
 }
 
 resource "aws_route_table_association" "private" {
@@ -72,3 +76,21 @@ resource "aws_route_table_association" "private" {
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private.id
 }
+
+# ---------------- Public IP for the NAT -----------------
+resource "aws_eip" "nat" {
+  domain = "vpc"
+  tags   = { Name = "dso-nat-eip" }
+}
+
+# NAT Gateway ($0.059/hour)
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
+  tags          = { Name = "dso-nat" }
+
+  # The NAT gateway requires the Internet gateway to be up beforehand
+  depends_on = [aws_internet_gateway.main]
+}
+
+# -----------------------------------------------------------------------
