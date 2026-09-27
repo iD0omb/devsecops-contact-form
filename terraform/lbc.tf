@@ -66,5 +66,5 @@ resource "helm_release" "lbc" {
     value = aws_vpc.main.id
   }
 
-  depends_on = [aws_iam_role_policy_attachment.lbc]
+  depends_on = [aws_iam_role_policy_attachment.lbc, module.eks]
 }
