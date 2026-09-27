@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-schema
+  namespace: contact-form
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: contact-form-app
+      restartPolicy: Never
+      containers:
+        - name: schema
+          image: "{{ image }}"
+          command:
+            - python
+            - -c
+            - |
+              from app import get_db_connection
+              conn = get_db_connection()
+              conn.cursor().execute(open("init.sql").read())
+              conn.commit()
+              print("schema applied")
+          envFrom:
+            - configMapRef:
+                name: app-config

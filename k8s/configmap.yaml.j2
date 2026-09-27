@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: contact-form
+data:
+  DB_HOST: "{{ rds_endpoint }}"
+  DB_PORT: "5432"
+  DB_NAME: "{{ db_name }}"
+  DB_SECRET_ARN: "{{ db_secret_arn }}"
+  AWS_DEFAULT_REGION: ap-southeast-1
