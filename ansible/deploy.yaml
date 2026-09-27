@@ -1,0 +1,113 @@
+- name: Deploy contact form to EKS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    repo_root: "{{ playbook_dir }}/.."
+    region: ap-southeast-1
+    namespace: contact-form
+
+  tasks:
+    # ---------- 1. Gather values ----------
+    - name: Read Terraform outputs
+      ansible.builtin.command: terraform -chdir={{ repo_root }}/terraform output -json
+      register: tf_raw
+      changed_when: false
+
+    - name: Get current commit hash (image tag)
+      ansible.builtin.command: git -C {{ repo_root }} rev-parse --short HEAD
+      register: git_sha
+      changed_when: false
+
+    - name: Set template variables
+      ansible.builtin.set_fact:
+        rds_endpoint: "{{ tf.rds_endpoint.value }}"
+        db_name: "{{ tf.db_name.value }}"
+        db_secret_arn: "{{ tf.db_secret_arn.value }}"
+        app_role_arn: "{{ tf.app_role_arn.value }}"
+        acm_certificate_arn: "{{ tf.acm_certificate_arn.value }}"
+        image: "{{ tf.ecr_repository_url.value }}:{{ git_sha.stdout }}"
+      vars:
+        tf: "{{ tf_raw.stdout | from_json }}"
+
+    # ---------- 2. Build and push, only if this tag is new ----------
+    - name: Check whether this tag is already in ECR
+      ansible.builtin.command: >
+        aws ecr describe-images --region {{ region }}
+        --repository-name dso-contact-form
+        --image-ids imageTag={{ git_sha.stdout }}
+      register: ecr_check
+      failed_when: false
+      changed_when: false
+
+    - name: Build and push image
+      when: ecr_check.rc != 0
+      block:
+        - name: Log Docker in to ECR
+          ansible.builtin.shell: >
+            aws ecr get-login-password --region {{ region }}
+            | docker login --username AWS --password-stdin {{ image.split('/')[0] }}
+
+        - name: Build image
+          ansible.builtin.command: docker build --provenance=false -t {{ image }} {{ repo_root }}/app
+
+        - name: Push image
+          ansible.builtin.command: docker push {{ image }}
+
+    # ---------- 3. Apply manifests ----------
+    - name: Apply namespace, service account and config
+      kubernetes.core.k8s:
+        state: present
+        template: "{{ repo_root }}/k8s/{{ item }}"
+      loop:
+        - namespace.yaml.j2
+        - serviceaccount.yaml.j2
+        - configmap.yaml.j2
+
+    - name: Remove previous schema Job
+      kubernetes.core.k8s:
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        name: db-schema
+        namespace: "{{ namespace }}"
+        delete_options:
+          propagationPolicy: Foreground
+        wait: true
+
+    - name: Run schema Job and wait for it to complete
+      kubernetes.core.k8s:
+        state: present
+        template: "{{ repo_root }}/k8s/job-schema.yaml.j2"
+        wait: true
+        wait_condition:
+          type: Complete
+          status: "True"
+        wait_timeout: 180
+
+    - name: Deploy app, service and ingress
+      kubernetes.core.k8s:
+        state: present
+        template: "{{ repo_root }}/k8s/{{ item }}"
+        wait: true
+        wait_timeout: 300
+      loop:
+        - deployment.yaml.j2
+        - service.yaml.j2
+        - ingress.yaml.j2
+
+    # ---------- 4. Report ----------
+    - name: Wait for the ALB address
+      kubernetes.core.k8s_info:
+        kind: Ingress
+        name: contact-form
+        namespace: "{{ namespace }}"
+      register: ing
+      until: (ing.resources[0].status.loadBalancer.ingress | default([])) | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Show ALB address for the Porkbun CNAME
+      ansible.builtin.debug:
+        msg: "Point the contact CNAME at {{ ing.resources[0].status.loadBalancer.ingress[0].hostname }}"
