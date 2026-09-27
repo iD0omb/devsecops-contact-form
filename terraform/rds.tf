@@ -41,7 +41,10 @@ resource "aws_db_instance" "main" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
 
-  backup_retention_period = 1
-  skip_final_snapshot     = true  # so teardown doesn't leave a snapshot
-  deletion_protection     = false # so terraform destroy works
+  backup_retention_period         = 7
+  copy_tags_to_snapshot           = true
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  apply_immediately               = true
+  skip_final_snapshot             = true  # so teardown doesn't leave a snapshot
+  deletion_protection             = false # so terraform destroy works
 }
