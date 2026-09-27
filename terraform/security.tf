@@ -54,6 +54,7 @@ data "aws_iam_policy_document" "config_bucket" {
     }
   }
 
+
   statement {
     sid       = "AWSConfigBucketDelivery"
     actions   = ["s3:PutObject"]
@@ -73,6 +74,42 @@ data "aws_iam_policy_document" "config_bucket" {
       values   = [data.aws_caller_identity.current.account_id]
     }
   }
+
+  statement {
+    sid       = "AWSCloudTrailAclCheck"
+    actions   = ["s3:GetBucketAcl"]
+    resources = [aws_s3_bucket.config.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceArn"
+      values   = [local.trail_arn]
+    }
+  }
+
+  statement {
+    sid       = "AWSCloudTrailWrite"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.config.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceArn"
+      values   = [local.trail_arn]
+    }
+  }
+
 
   # Non-HTTPS denial
   statement {
@@ -137,4 +174,21 @@ resource "aws_securityhub_standards_subscription" "fsbp" {
 resource "aws_securityhub_standards_subscription" "cis" {
   standards_arn = "arn:aws:securityhub:${data.aws_region.current.region}::standards/cis-aws-foundations-benchmark/v/5.0.0"
   depends_on    = [aws_securityhub_account.main]
+}
+
+
+# ---------- CloudTrail: audit log of every API call ----------
+
+locals {
+  trail_name = "dso-trail"
+  trail_arn  = "arn:aws:cloudtrail:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:trail/${local.trail_name}"
+}
+
+resource "aws_cloudtrail" "main" {
+  name                          = local.trail_name
+  s3_bucket_name                = aws_s3_bucket.config.id
+  is_multi_region_trail         = true
+  include_global_service_events = true
+  enable_log_file_validation    = true
+  depends_on                    = [aws_s3_bucket_policy.config]
 }
