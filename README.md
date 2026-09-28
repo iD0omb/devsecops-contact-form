@@ -9,12 +9,12 @@ Everything is deployed from a local workstation,
 * The environment is hardened using security controls. 
 * **AWS Security Hub** checks it against *AWS Foundational Security Best Practices (FSBP)* and the *CIS AWS Foundations Benchmark v5.0.0*.
 
-- Security controls and how to verify each one: [`security-hardening.md`](security-hardening.md)
-- Security Hub results, remediation and exceptions: [`security-hub.md`](security-hub.md)
+- Security controls and how to verify each one: [`docs/security-hardening.md`](docs/security-hardening.md)
+- Security Hub results, remediation and exceptions: [`docs/security-hub.md`](docs/security-hub.md)
 
 ## Architecture
 
-![Architecture](images/architecture.png)
+![Architecture](docs/images/architecture.png)
 
 **How a request flows**
 1. The browser connects to `https://contact.<domain>`. The ALB presents an ACM certificate and decrypts the traffic.
@@ -146,4 +146,4 @@ If a later `apply` fails with `ResourceAlreadyExistsException` for `/aws/eks/dso
 
 - **Local Terraform state.** No remote backend or state locking; fine for one person, not for a team.
 - **Deploying uncommitted code** would tag an image with a commit that doesn't contain the changes. The rule is to commit first; a `git status` guard task would be the next improvement.
-- **The base image has 2 HIGH CVEs** (perl, zlib) reported by the ECR scan. Rebuild on a patched `python:3.12-slim` when one is available (see [`security-hardening.md`](security-hardening.md)).
+- **The base image has 2 HIGH CVEs** (perl, zlib) reported by the ECR scan. Rebuild on a patched `python:3.12-slim` when one is available (see [`docs/security-hardening.md`](docs/security-hardening.md)).
