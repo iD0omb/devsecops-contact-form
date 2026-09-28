@@ -1,7 +1,99 @@
-# Security Hardening Documentation
-|                           |                                                                 |
-| ------------------------- | --------------------------------------------------------------- |
-| Non-root containers       | Dockerfile: USER appuser                                        |
-| No Hard-coded Credentials | Config via environment variables, and gitleaks pre-commit hook. |
-| Exceptions                | TerraformAdmin has AdministratorAccess for IAM user creation.   |
-|                           |                                                                 |
+# Security Hardening
+Every control below is in code (Terraform, Kubernetes manifests, Dockerfile or app), so it's recreated on every deploy. Each row has a command to check it against the live environment.
+
+Commands assume `AWS_PROFILE` is set and kubectl points at the cluster. 
+Run them in bash (WSL), most also work in cmd.
+## 1. Network
+
+| Control                                                | Implementation                                                                                                                                      | How to verify                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nodes and database are not reachable from the internet | EKS nodes and RDS sit in **private subnets** (no route from the Internet Gateway). Outbound only, through a **NAT Gateway** (`network.tf`).         | `aws ec2 describe-instances --filters Name=tag:eks:cluster-name,Values=dso-eks --query "Reservations[].Instances[].PublicIpAddress"` → empty                                                                                                                                                                        |
+| RDS accepts connections only from the cluster          | Security group `dso-rds`: one inbound rule, **TCP 5432 from the EKS node security group only** (`rds.tf`)                                           | `aws ec2 describe-security-groups --filters Name=group-name,Values=dso-rds --query "SecurityGroups[0].IpPermissions"` → one rule, port 5432, source is a security group (no IP ranges)                                                                                                                              |
+| RDS is not public                                      | `publicly_accessible = false`                                                                                                                       | `aws rds describe-db-instances --db-instance-identifier dso-postgres --query "DBInstances[0].PubliclyAccessible"` → `false`                                                                                                                                                                                         |
+| EKS API only reachable from the admin's IP             | `endpoint_public_access_cidrs = [var.admin_cidr]` (a single /32; the module default is `0.0.0.0/0`). Private endpoint access is also on. (`eks.tf`) | `aws eks describe-cluster --name dso-eks --query "cluster.resourcesVpcConfig.{Public:endpointPublicAccess,Private:endpointPrivateAccess,CIDRs:publicAccessCidrs}"`                                                                                                                                                  |
+| The VPC's default security group can't be used         | Adopted by Terraform with **no rules** (`aws_default_security_group`, `account-security.tf`)                                                        | Get the VPC ID with `aws ec2 describe-vpcs --filters Name=tag:Name,Values=dso-vpc --query "Vpcs[0].VpcId" --output text`, then `aws ec2 describe-security-groups --filters Name=vpc-id,Values=<vpc-id> Name=group-name,Values=default --query "SecurityGroups[0].[IpPermissions,IpPermissionsEgress]"` → `[[], []]` |
+| Only the ALB is public, on HTTPS                       | Ingress creates an internet-facing ALB in the public subnets; port 80 only redirects to 443                                                         | `curl -I http://contact.<domain>` → `301` to `https://`                                                                                                                                                                                                                                                             |
+
+## 2. Encryption
+
+| Control | How implemented | How to verify |
+|---|---|---|
+| In transit: browser → ALB | ACM certificate; 443 listener with policy **`ELBSecurityPolicy-TLS13-1-2-2021-06`** (TLS 1.2/1.3 only; the controller's default still allows TLS 1.0/1.1); HTTP → HTTPS redirect (`ingress.yaml.j2`) | `aws elbv2 describe-listeners --load-balancer-arn <arn> --query "Listeners[].{Port:Port,Protocol:Protocol,Policy:SslPolicy}" --output table` |
+| In transit: app → RDS | App connects with `sslmode=require` (`app.py`); PostgreSQL 15+ on RDS enforces TLS server-side (`rds.force_ssl = 1`) | `aws rds describe-db-parameters --db-parameter-group-name default.postgres17 --query "Parameters[?ParameterName=='rds.force_ssl'].ParameterValue"` → `1` |
+| At rest: RDS | `storage_encrypted = true` | `aws rds describe-db-instances --db-instance-identifier dso-postgres --query "DBInstances[0].StorageEncrypted"` → `true` |
+| At rest: Kubernetes Secrets in etcd | EKS envelope encryption with a KMS key (module default) | `aws eks describe-cluster --name dso-eks --query "cluster.encryptionConfig"` → `resources: ["secrets"]` with a key ARN |
+| At rest: all new EBS volumes | Region-wide EBS encryption by default (`account-security.tf`) | `aws ec2 get-ebs-encryption-by-default` → `true` |
+| Log bucket: HTTPS only, private | Bucket policy `DenyInsecureTransport` + all four public-access blocks (`security.tf`) | `aws s3api get-public-access-block --bucket <dso-config-...>` |
+
+## 3. Identity and access
+
+| Control                                              | How implemented                                                                                                                                                                                    | How to verify                                                                                                                                                                                                               |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App gets AWS access without stored keys (IRSA)       | Service account `contact-form-app` is annotated with IAM role `dso-contact-form-app`. Trust policy allows **only** that service account in namespace `contact-form`, and only for STS (`irsa.tf`). | `aws iam get-role --role-name dso-contact-form-app --query "Role.AssumeRolePolicyDocument"`                                                                                                                                 |
+| App role is least privilege                          | One permission: `secretsmanager:GetSecretValue` on **one** secret (the RDS password)                                                                                                               | `aws iam get-role-policy --role-name dso-contact-form-app --policy-name read-db-secret`                                                                                                                                     |
+| Pods can't borrow the node's IAM role                | IMDSv2 required with **hop limit 1** (EKS module default), so metadata responses can't reach pods                                                                                                  | `aws ec2 describe-instances --filters Name=tag:eks:cluster-name,Values=dso-eks --query "Reservations[].Instances[].MetadataOptions.{Tokens:HttpTokens,HopLimit:HttpPutResponseHopLimit}" --output table` → `required` / `1` |
+| App pods have no Kubernetes API token                | `automountServiceAccountToken: false` on the service account (`serviceaccount.yaml.j2`). The app never calls the Kubernetes API. The IRSA token is a separate volume.                              | `kubectl get pod -n contact-form -l app=contact-form -o jsonpath="{.items[0].spec.volumes[*].name}"` → `aws-iam-token`, no `kube-api-access-...`                                                                            |
+| Load Balancer Controller has its own scoped identity | Separate IRSA role; trust limited to `kube-system:aws-load-balancer-controller` (`lbc.tf`)                                                                                                         | `aws iam get-role --role-name dso-aws-load-balancer-controller --query "Role.AssumeRolePolicyDocument"`                                                                                                                     |
+| Cluster access is explicit                           | 3 access entries: **TerraformAdmin** (cluster admin, the only human access), the **node group role** (so nodes can join) and the **EKS service-linked role** (AWS's own management).               | `aws eks list-access-entries --cluster-name dso-eks`                                                                                                                                                                        |
+| Account password policy                              | 14+ characters, all character types, 24 remembered passwords (`account-security.tf`)                                                                                                               | `aws iam get-account-password-policy`                                                                                                                                                                                       |
+| External sharing is flagged                          | IAM Access Analyzer (account scope)                                                                                                                                                                | `aws accessanalyzer list-analyzers --query "analyzers[].name"`                                                                                                                                                              |
+
+## 4. Workload (pods and containers)
+
+| Control | How implemented | How to verify |
+|---|---|---|
+| Container runs as non-root | Dockerfile: `USER appuser` | `kubectl exec deploy/contact-form -n contact-form -- id` → `uid=1000` |
+| Pods meet the Pod Security Standards **"restricted"** profile | Deployment **and** schema Job: `runAsNonRoot`, `runAsUser: 1000`, `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]` | `kubectl get deploy contact-form -n contact-form -o jsonpath="{.spec.template.spec.securityContext}"` and `kubectl get job db-schema -n contact-form -o jsonpath="{.spec.template.spec.securityContext}"` |
+| Resource limits | Requests 100m CPU / 128Mi; limits 500m / 256Mi | `kubectl get deploy contact-form -n contact-form -o jsonpath="{.spec.template.spec.containers[0].resources}"` |
+| Health checks | Readiness and liveness probes on `/health` (no database call, so a DB blip doesn't restart every pod) | `kubectl describe deploy contact-form -n contact-form` → Liveness / Readiness |
+| SQL injection | Parameterised queries (`%s` placeholders) in `app.py` | Code review: `cur.execute("INSERT ... VALUES (%s, %s, %s)", (...))` |
+| Production web server | Gunicorn instead of Flask's development server | `kubectl logs deploy/contact-form -n contact-form` → Gunicorn startup lines |
+
+## 5. Secrets and configuration
+
+| Control | How implemented                                                                                                                                                                                        | How to verify |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| No hard-coded credentials | RDS generates the password into Secrets Manager (`manage_master_user_password`); the app reads it via IRSA each time it opens a database connection. Manifests only contain the secret's **ARN**. | `kubectl get configmap app-config -n contact-form -o yaml` → no password |
+| No account-specific values in the repo | `k8s/*.yaml.j2` are templates; Ansible fills in ARNs and endpoints from `terraform output` **in memory**; `terraform.tfvars` (IP, domain) is gitignored                                                | `grep -rn "arn:aws" k8s/` → nothing |
+| Secrets caught before commit | gitleaks pre-commit hook. Tested: it caught 1 of 2 planted fake keys (the high-entropy one), so it's a safety net, not a guarantee.                                                                    | `pre-commit run gitleaks --all-files` |
+
+## 6. Supply chain (images)
+
+| Control | How implemented | How to verify |
+|---|---|---|
+| Image vulnerability scanning | ECR `scan_on_push = true`. Images are built with `--provenance=false`: Docker's default attestation turns the tag into an image index, which basic scanning can't scan. | `aws ecr describe-image-scan-findings --repository-name dso-contact-form --image-id imageTag=<tag>` |
+| Images can't be overwritten | `image_tag_mutability = "IMMUTABLE"`; tag = git commit hash | Pushing an existing tag is rejected |
+| Old images are cleaned up | Lifecycle policy keeps the last 10 images | `aws ecr get-lifecycle-policy --repository-name dso-contact-form` |
+
+**Current scan result:** 2 HIGH findings, both in the base image's OS packages, not in the app code:
+
+| CVE | Package | Status |
+|---|---|---|
+| CVE-2026-82560 | perl `Pod::Text` (CPU/memory exhaustion on crafted POD input) | Accepted: the app never processes POD documents. Fix: rebuild on a patched `python:3.12-slim`. |
+| CVE-2026-85091 | zlib (heap overflow in non-blocking `gzwrite`) | Accepted: the app doesn't use gz file writing. Fix: rebuild on a patched base image. |
+
+## 7. Logging and detection
+
+| Control                    | How implemented                                                                                                                    | How to verify                                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| EKS control-plane logs     | `api`, `audit`, `authenticator` log types → CloudWatch (`eks.tf`)                                                                  | `aws eks describe-cluster --name dso-eks --query "cluster.logging.clusterLogging"`                                          |
+| Audit log of all API calls | CloudTrail `dso-trail`: multi-region, includes global services (IAM), **log file validation** on, stored in the private log bucket | `aws cloudtrail get-trail-status --name dso-trail --query IsLogging` → `true`                                               |
+| Configuration history      | AWS Config records all supported resource types                                                                                    | `aws configservice describe-configuration-recorder-status` → `recording: true`                                              |
+| Compliance checks          | Security Hub with **FSBP v1.0.0** and **CIS v5.0.0** (see security-hub.md)                                                         | `aws securityhub get-enabled-standards --query "StandardsSubscriptions[].StandardsArn"`                                     |
+| Threat detection           | GuardDuty detector                                                                                                                 | `aws guardduty list-detectors` → one ID                                                                                     |
+| Database logs              | PostgreSQL and upgrade logs exported to CloudWatch                                                                                 | `aws rds describe-db-instances --db-instance-identifier dso-postgres --query "DBInstances[0].EnabledCloudwatchLogsExports"` |
+
+---
+
+## Exceptions (accepted risks)
+
+| Item                                                           | Why it's accepted                                                                                               | Possible remediation                                                                                                       |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `TerraformAdmin` has `AdministratorAccess`                     | It's the provisioning identity and creates IAM roles, so it needs broad rights. CLI-only (no console password). | Scope it down with a **permissions boundary**, or use short-lived SSO credentials (`aws sso login`) instead of access keys |
+| Load Balancer Controller uses AWS's published IAM policy as-is | It needs to create ALBs, target groups and security groups                                                      | Tighten with resource tags/conditions                                                                                      |
+| EKS API endpoint is public (restricted to one IP)              | Needed to run Terraform/kubectl from a workstation without a VPN                                                | Private endpoint only, reached through a VPN or bastion                                                                    |
+| TLS terminates at the ALB                                      | ALB → pod traffic stays inside the private VPC                                                                  | End-to-end TLS with certificates in the pods, or a service mesh                                                            |
+| App connects as the RDS master user                            | Keeps setup simple; the password is still never exposed                                                         | A dedicated DB user with only `INSERT`/`SELECT` on `submissions`                                                           |
+| Single NAT Gateway                                             | Cost                                                                                                            | One NAT per AZ                                                                                                             |
+| Account-wide settings live in the app's stack                  | One apply / one destroy                                                                                         | A separate long-lived baseline stack                                                                                       |
+
