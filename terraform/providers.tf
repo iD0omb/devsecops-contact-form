@@ -2,6 +2,13 @@
 provider "aws" {
   region = "ap-southeast-1" # Provider region
   # Credentials are not stored here.
+  default_tags {
+    tags = {
+      Project     = "devsecops-contact-form"
+      ManagedBy   = "terraform"
+      Environment = "demo"
+    }
+  }
 }
 
 # Lets Terraform install helm charts into the EKS cluster,
