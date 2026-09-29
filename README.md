@@ -55,7 +55,7 @@ Everything is deployed from a local workstation,
 Create `terraform/terraform.tfvars` (gitignored):
 
 ```hcl
-admin_cidr = "<your public IP>/32"   # who may reach the EKS API
+admin_cidr = "<your public IP>/32"   # who may reach the EKS API https://checkip.amazonaws.com
 app_domain = "contact.<your-domain>" # name on the HTTPS certificate
 ```
 ## Deploy
