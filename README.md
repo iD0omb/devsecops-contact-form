@@ -40,6 +40,7 @@ Everything is deployed from a local workstation,
 | `ansible/deploy.yaml` | Build, push and deploy playbook                                                                |
 | `docker-compose.yml`  | Local development (app + Postgres)                                                             |
 | `docs/`               | Security documentation                                                                         |
+* *Local dev: Create a .env with DB_NAME, DB_USER, DB_PASSWORD*
 
 ## Prerequisites
 
