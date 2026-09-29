@@ -60,10 +60,16 @@ app_domain = "contact.<your-domain>" # name on the HTTPS certificate
 ```
 ## Deploy
 
+Terraform can run in any shell. Ansible needs Linux, so on Windows run the
+**"Deploy the app"** steps in WSL. Each environment keeps its own Terraform
+providers and kubeconfig, so those steps are repeated there.
+
+### Provision the infrastructure
+
 ```bash
 # 0. Use the project's AWS profile (cmd: set AWS_PROFILE=devsecops)
 export AWS_PROFILE=devsecops
-aws sts get-caller-identity
+aws sts get-caller-identity              # should show the expected IAM user
 
 # 1. Infrastructure (~20 minutes, mostly EKS)
 terraform -chdir=terraform init
@@ -73,18 +79,27 @@ terraform -chdir=terraform apply deploy.tfplan
 # 2. First time only: prove domain ownership for the certificate.
 #    Add the CNAME from this output at your DNS provider, then wait for ISSUED.
 terraform -chdir=terraform output acm_validation_record
+```
 
-# 3. Point kubectl at the new cluster
+### Deploy the app (in the shell where Ansible runs, e.g. WSL)
+
+```bash
+# 3. Check Docker is reachable (on Windows: start Docker Desktop and enable
+#    Settings → Resources → WSL integration for your distro)
+docker info > /dev/null && echo "Docker OK"
+
+# 4. Point kubectl at the new cluster (this shell has its own kubeconfig)
 aws eks update-kubeconfig --name dso-eks --region ap-southeast-1
+kubectl get nodes                        # expect 2 nodes Ready
 
-# 4. Run Terraform init in WSL
+# 5. Install this OS's Terraform providers, so Ansible can read the outputs
 terraform -chdir=terraform init
 
-# 5. Build, push and deploy (commit first: the image tag is the commit hash)
+# 6. Build, push and deploy (commit first: the image tag is the commit hash)
 ansible-playbook ansible/deploy.yaml
 ```
 
-5. At your DNS provider, point `contact.<domain>` (CNAME) at the ALB address that the playbook prints last.
+7. At your DNS provider, point `contact.<domain>` (CNAME) at the ALB address the playbook prints last.
 
 ### What the playbook does
 
