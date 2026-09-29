@@ -168,12 +168,12 @@ resource "aws_securityhub_account" "main" {
 
 resource "aws_securityhub_standards_subscription" "fsbp" {
   standards_arn = "arn:aws:securityhub:${data.aws_region.current.region}::standards/aws-foundational-security-best-practices/v/1.0.0"
-  depends_on    = [aws_securityhub_account.main]
+  depends_on = [aws_securityhub_account.main, aws_config_configuration_recorder_status.main]
 }
 
 resource "aws_securityhub_standards_subscription" "cis" {
   standards_arn = "arn:aws:securityhub:${data.aws_region.current.region}::standards/cis-aws-foundations-benchmark/v/5.0.0"
-  depends_on    = [aws_securityhub_account.main]
+  depends_on = [aws_securityhub_account.main, aws_config_configuration_recorder_status.main]
 }
 
 
