@@ -77,7 +77,10 @@ terraform -chdir=terraform output acm_validation_record
 # 3. Point kubectl at the new cluster
 aws eks update-kubeconfig --name dso-eks --region ap-southeast-1
 
-# 4. Build, push and deploy (commit first: the image tag is the commit hash)
+# 4. Run Terraform init in WSL
+terraform -chdir=terraform init
+
+# 5. Build, push and deploy (commit first: the image tag is the commit hash)
 ansible-playbook ansible/deploy.yaml
 ```
 
