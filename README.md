@@ -126,7 +126,7 @@ kubectl exec deploy/contact-form -n contact-form -- python show_submissions.py
 kubectl get all,ingress -n contact-form
 ```
 
-Every security control has its own verification command in [`security-hardening.md`](security-hardening.md).
+Every security control has its own verification command in [`docs/security-hardening.md`](docs/security-hardening.md).
 
 ---
 
